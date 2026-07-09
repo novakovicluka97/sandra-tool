@@ -1,0 +1,25 @@
+{
+  "name": "sandra-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Swiss Zeugnis generator: Next.js web app + CLI eval harness (Anthropic API)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "eval": "node scripts/run-all.mjs",
+    "generate": "node scripts/generate.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "next": "^15.3.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.5.0"
+  }
+}

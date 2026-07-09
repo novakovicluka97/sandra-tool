@@ -1,0 +1,73 @@
+# Sandra-Tool — Swiss Zeugnis Generator
+
+Generates drafts of Swiss employment references (**Zwischenzeugnis** / **Arbeitszeugnis**) from scanned *Zeugnisantrag* forms (GRP_DK_1054) via the Anthropic API. One repo, two entry points:
+
+- **Web app** (Next.js): upload a form PDF, pick the letter type, get a streamed draft for HR review.
+- **Eval harness** (CLI): runs a 12-case test matrix against real HR letters and Swiss legal principles (Art. 330a OR).
+
+## Layout
+
+```
+app/                         Next.js App Router UI + POST /api/generate (streams the draft)
+prompts/system-zeugnis.md    German system prompt: legal rules, calibration table, structure, output contract
+prompts/style-rules.md       Binding style rules (no em-dashes, natural HR register, signature block format)
+prompts/company-config.md    Polymed boilerplate: company paragraph, signatory rules, abbreviations
+examples/                    Few-shot pool: form transcripts + real letters (Biafora, Bergomi, Mettler)
+scripts/generate.mjs         One generation: form (PDF sent natively, or .md transcript) -> letter draft
+scripts/run-all.mjs          The 12-case test matrix with leave-one-out few-shot selection
+eval/inputs/synthetic/       5 synthetic forms covering cases the sample batch doesn't (weak ratings,
+                             termination, retirement+leadership, near-empty form, part-time transfer)
+eval/outputs/<case>/         Generated drafts from the last harness run (letter + "Hinweise für HR")
+eval/outputs-v1/             Prompt-v1 outputs, kept for comparison
+eval/rubric.md               Law-anchored grading rubric (7 weighted dimensions, hard-fail overrides)
+eval/comparison.md           Developer session's honest evaluation
+eval/VALIDATION-PROTOCOL.md  How to run an unbiased second evaluation in a fresh AI session
+training-data/               Original scanned forms and real HR letters (PDF/DOCX)
+```
+
+## Run the web app
+
+Requires Node 22+ and `ANTHROPIC_API_KEY` in `.env.local` (or `.env`).
+
+```
+npm install
+npm run dev        # http://localhost:3000
+npm run build      # production build
+```
+
+The app sends the uploaded PDF natively to `claude-opus-4-8` with adaptive thinking and streams the draft back. Prompt and example `.md` files are read from disk at runtime (`next.config.mjs` includes them in the serverless bundle for Vercel).
+
+## Run the eval harness
+
+```
+npm run eval                                     # all 12 cases -> eval/outputs/
+npm run eval -- --only mettler                   # substring filter on case/type
+npm run eval -- --model claude-opus-4-8          # model comparison run
+npm run generate -- --input <pdf|md> --type zwischenzeugnis --case foo --examples biafora:zwischenzeugnis,mettler:zwischenzeugnis
+```
+
+Harness default model: `claude-sonnet-5`. Real form PDFs are sent to the API natively (no OCR step) — the model reads checkboxes and handwriting visually. Note: on `claude-sonnet-5` do not add `temperature` (non-default sampling params are rejected with a 400); determinism is approximated by the prompt's hard calibration rules.
+
+## Design decisions (why it is built this way)
+
+- **Leave-one-out few-shot:** a case's own real letters never appear in its prompt; `generate.mjs` throws on leakage. Moser additionally excludes same-department Bergomi to test generalization.
+- **Checked level = hard constraint:** the form's sehr gut/gut/genügend phrase matrix is embedded verbatim; the prompt forbids intensity changes in either direction (the main legal risk).
+- **No invention:** missing data → bracketed placeholders; empty task list → placeholder block. Real HR letters enrich from HR systems the AI cannot see — the eval categorizes those gaps as "unknowable enrichment", not errors.
+- **Conservative ambiguity handling:** double-checked boxes resolve to the lower level; everything is reported in the mandatory `## Hinweise für HR` section. Output is always a draft for human review.
+- **Anti-overfitting:** grading is anchored in Art. 330a principles, house-style similarity is only 5% of the rubric, and half the matrix is synthetic cases outside the sample batch's distribution.
+- **Same prompt stack everywhere:** the harness (`scripts/generate.mjs`) and the app (`app/api/generate/route.ts`) build the system prompt from the same `prompts/` + `examples/` files, so eval results describe the shipped behavior.
+
+## Prompt-change log
+
+- v1: initial prompt. Smoke test (Mettler): all 20 rated dimensions at correct calibration register from the scanned PDF; no changes made. No tuning toward sample texts beyond the structure template.
+- Harness fix (not a prompt change): `max_tokens` 8192 → 16000 — adaptive thinking shares the output budget and the first full-matrix run truncated on biafora/arbeitszeugnis.
+- v2: added rule «3a. Tempus-Disziplin». The v1 full matrix showed a systematic defect: past-tense slips in Zwischenzeugnisse («Wir lernten X kennen» in 4 of 8 ZZ letters; «erbrachte» in biafora/zwischenzeugnis), caused by the calibration table quoting the form's past-tense phrases. Legally motivated fix (rubric dim. 4), not style tuning. Full matrix re-run on v2.
+- style-rules.md added for the web app (no em-dashes, natural register, signature block format) and now included by the harness as well.
+
+## Known limitations
+
+- Text/Markdown output only — no .docx/PDF rendering, letterhead, or signatures yet.
+- Company config is hardcoded to Polymed.
+- Only one real Arbeitszeugnis exists in the training data; AZ generation for non-Biafora cases relies on the prompt rules plus one example.
+- Personal data flows to the Anthropic API unpseudonymized (fine for this fake-data test; production posture documented in the project consultation).
+- Single-user, no auth (Supabase keys in `.env` are provisioned for a planned multi-user login, not wired up yet).
