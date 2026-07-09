@@ -235,6 +235,28 @@ body {
   flex-shrink: 0;
 }
 
+.chip-remove {
+  appearance: none;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.chip-remove:hover:not(:disabled) {
+  color: var(--red);
+}
+
+.chip-remove:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* type toggle */
 
 .type-toggle {
@@ -347,6 +369,59 @@ body {
   min-width: 0;
 }
 
+.job-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
+}
+
+.job-tab {
+  appearance: none;
+  border: none;
+  border-right: 1px solid var(--line-soft);
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 11px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-tab.active {
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--red);
+}
+
+.job-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-soft);
+  flex-shrink: 0;
+}
+
+.job-dot.uploading,
+.job-dot.streaming {
+  background: var(--red);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.job-dot.done {
+  background: #2e7d32;
+}
+
+.job-dot.error {
+  background: var(--red);
+}
+
 .doc-toolbar {
   display: flex;
   align-items: center;
@@ -388,6 +463,17 @@ body {
 .toolbtn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.toolbtn.primary {
+  background: var(--ink);
+  color: var(--paper-raised);
+  border-color: var(--ink);
+}
+
+.toolbtn.primary:hover:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
 }
 
 .doc-scroll {

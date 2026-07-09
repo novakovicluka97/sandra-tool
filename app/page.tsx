@@ -3,7 +3,16 @@
 import { useRef, useState, type ReactNode } from "react";
 
 type LetterType = "zwischenzeugnis" | "arbeitszeugnis";
-type Phase = "idle" | "uploading" | "streaming" | "done" | "error";
+type JobPhase = "queued" | "uploading" | "streaming" | "done" | "error";
+
+type Job = {
+  id: number;
+  fileName: string;
+  type: LetterType;
+  phase: JobPhase;
+  output: string;
+  error: string;
+};
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -62,107 +71,177 @@ function renderLetter(md: string): ReactNode[] {
   return blocks;
 }
 
+function shortName(name: string): string {
+  const base = name.replace(/\.pdf$/i, "");
+  return base.length > 22 ? `${base.slice(0, 20)}…` : base;
+}
+
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [type, setType] = useState<LetterType>("zwischenzeugnis");
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [output, setOutput] = useState("");
-  const [error, setError] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [activeId, setActiveId] = useState<number>(0);
+  const [busy, setBusy] = useState(false);
+  const [pickError, setPickError] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [copied, setCopied] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
 
-  const busy = phase === "uploading" || phase === "streaming";
+  const activeJob = jobs.find((j) => j.id === activeId) ?? jobs[0] ?? null;
 
-  function acceptFile(candidate: File | undefined | null) {
-    if (!candidate) return;
-    if (!candidate.name.toLowerCase().endsWith(".pdf")) {
-      setError("Bitte ein PDF auswählen.");
-      setPhase("error");
-      return;
+  function acceptFiles(list: FileList | File[] | null | undefined) {
+    if (!list || list.length === 0) return;
+    const incoming = Array.from(list);
+    const pdfs = incoming.filter(
+      (f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf",
+    );
+    setPickError(
+      pdfs.length < incoming.length ? "Nur PDF-Dateien werden übernommen." : "",
+    );
+    if (pdfs.length === 0) return;
+    setFiles((prev) => {
+      const known = new Set(prev.map((f) => `${f.name}|${f.size}`));
+      return [...prev, ...pdfs.filter((f) => !known.has(`${f.name}|${f.size}`))];
+    });
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function patchJob(id: number, patch: Partial<Job>) {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  }
+
+  async function runJob(job: Job, file: File, controller: AbortController) {
+    patchJob(job.id, { phase: "uploading" });
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("type", job.type);
+
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      let message = `Fehler ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data?.error) message = data.error;
+      } catch {}
+      throw new Error(message);
     }
-    setFile(candidate);
-    setError("");
-    if (phase === "error") setPhase("idle");
+    if (!res.body) throw new Error("Keine Antwort vom Server.");
+
+    patchJob(job.id, { phase: "streaming" });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      patchJob(job.id, { output: text });
+    }
+    text += decoder.decode();
+    patchJob(job.id, { output: text, phase: "done" });
   }
 
   async function generate() {
-    if (!file || busy) return;
-    setPhase("uploading");
-    setOutput("");
-    setError("");
-    setCopied(false);
+    if (files.length === 0 || busy) return;
+    setBusy(true);
+    cancelledRef.current = false;
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const newJobs: Job[] = files.map((f, i) => ({
+      id: Date.now() + i,
+      fileName: f.name,
+      type,
+      phase: "queued",
+      output: "",
+      error: "",
+    }));
+    setJobs(newJobs);
+    setActiveId(newJobs[0].id);
 
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("type", type);
-
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        body: form,
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        let message = `Fehler ${res.status}`;
-        try {
-          const data = await res.json();
-          if (data?.error) message = data.error;
-        } catch {}
-        throw new Error(message);
+    for (let i = 0; i < newJobs.length; i++) {
+      if (cancelledRef.current) {
+        patchJob(newJobs[i].id, { phase: "error", error: "Abgebrochen." });
+        continue;
       }
-      if (!res.body) throw new Error("Keine Antwort vom Server.");
-
-      setPhase("streaming");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let text = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        text += decoder.decode(value, { stream: true });
-        setOutput(text);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setActiveId(newJobs[i].id);
+      try {
+        await runJob(newJobs[i], files[i], controller);
+      } catch (err) {
+        patchJob(newJobs[i].id, {
+          phase: "error",
+          error: controller.signal.aborted
+            ? "Abgebrochen."
+            : err instanceof Error
+              ? err.message
+              : "Unbekannter Fehler",
+        });
       }
-      text += decoder.decode();
-      setOutput(text);
-      setPhase("done");
-    } catch (err) {
-      if (controller.signal.aborted) {
-        setPhase("idle");
-        return;
-      }
-      setError(err instanceof Error ? err.message : "Unbekannter Fehler");
-      setPhase("error");
-    } finally {
-      abortRef.current = null;
     }
+    abortRef.current = null;
+    setBusy(false);
   }
 
   function cancel() {
+    cancelledRef.current = true;
     abortRef.current?.abort();
   }
 
-  async function copyOutput() {
-    if (!output) return;
-    await navigator.clipboard.writeText(output);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
+  async function downloadJob(job: Job) {
+    if (!job.output) return;
+    const { letterToDocxBlob, letterFilename } = await import("@/lib/docx");
+    const blob = await letterToDocxBlob(job.output);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = letterFilename(job.output, job.type, job.fileName);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
-  const statusText =
-    phase === "uploading"
-      ? "Formular wird gelesen …"
-      : phase === "streaming"
-        ? "Entwurf wird geschrieben …"
-        : phase === "done"
-          ? "Entwurf fertig. Bitte prüfen."
-          : phase === "error"
-            ? error
-            : "";
+  async function downloadAll() {
+    for (const job of jobs) {
+      if (job.phase === "done" && job.output) {
+        await downloadJob(job);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+  }
+
+  const doneCount = jobs.filter((j) => j.phase === "done").length;
+  const runningIndex = jobs.findIndex(
+    (j) => j.phase === "uploading" || j.phase === "streaming",
+  );
+
+  const statusText = busy
+    ? jobs.length > 1
+      ? `Datei ${runningIndex + 1} von ${jobs.length} wird verarbeitet …`
+      : runningIndex >= 0 && jobs[runningIndex].phase === "uploading"
+        ? "Formular wird gelesen …"
+        : "Entwurf wird geschrieben …"
+    : jobs.length > 0
+      ? doneCount === jobs.length
+        ? "Entwürfe fertig. Bitte prüfen."
+        : doneCount > 0
+          ? `${doneCount} von ${jobs.length} Entwürfen fertig.`
+          : jobs.some((j) => j.phase === "error")
+            ? (jobs.find((j) => j.phase === "error")?.error ?? "Fehler")
+            : ""
+      : pickError;
+
+  const statusIsError =
+    !busy && (pickError !== "" || (jobs.length > 0 && doneCount === 0 && jobs.some((j) => j.phase === "error")));
 
   return (
     <div className="frame">
@@ -179,7 +258,6 @@ export default function Home() {
           </div>
         </div>
         <div className="masthead-right">
-          <span className="badge">Claude Opus 4.8</span>
           <span>Prototyp</span>
         </div>
       </header>
@@ -189,7 +267,7 @@ export default function Home() {
           <div className="step">
             <div className="step-label">
               <span className="step-num">01</span>
-              <span className="step-title">Zeugnisantrag hochladen</span>
+              <span className="step-title">Zeugnisanträge hochladen</span>
             </div>
             <label
               className={`dropzone${dragging ? " dragging" : ""}`}
@@ -201,29 +279,42 @@ export default function Home() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragging(false);
-                acceptFile(e.dataTransfer.files?.[0]);
+                acceptFiles(e.dataTransfer.files);
               }}
             >
               <input
                 type="file"
                 accept=".pdf,application/pdf"
-                onChange={(e) => acceptFile(e.target.files?.[0])}
+                multiple
+                onChange={(e) => {
+                  acceptFiles(e.target.files);
+                  e.target.value = "";
+                }}
                 disabled={busy}
               />
               <div className="dropzone-icon">⇪</div>
               <div className="dropzone-main">
-                PDF hierher ziehen oder klicken
+                PDFs hierher ziehen oder klicken
               </div>
               <div className="dropzone-hint">
-                Formular GRP_DK_1054 · max. 10 MB
+                Formular GRP_DK_1054 · mehrere Dateien möglich · max. 10 MB
               </div>
             </label>
-            {file && (
-              <div className="file-chip">
-                <span className="name">{file.name}</span>
-                <span className="size">{formatSize(file.size)}</span>
+            {files.map((f, i) => (
+              <div className="file-chip" key={`${f.name}-${f.size}-${i}`}>
+                <span className="name">{f.name}</span>
+                <span className="size">{formatSize(f.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  onClick={() => removeFile(i)}
+                  disabled={busy}
+                  aria-label={`${f.name} entfernen`}
+                >
+                  ×
+                </button>
               </div>
-            )}
+            ))}
           </div>
 
           <div className="step">
@@ -259,7 +350,7 @@ export default function Home() {
           <div className="step">
             <div className="step-label">
               <span className="step-num">03</span>
-              <span className="step-title">Entwurf erstellen</span>
+              <span className="step-title">Entwürfe erstellen</span>
             </div>
             {busy ? (
               <button type="button" className="generate" onClick={cancel}>
@@ -270,12 +361,15 @@ export default function Home() {
                 type="button"
                 className="generate"
                 onClick={generate}
-                disabled={!file}
+                disabled={files.length === 0}
               >
-                Entwurf erstellen <span className="arrow">→</span>
+                {files.length > 1
+                  ? `${files.length} Entwürfe erstellen`
+                  : "Entwurf erstellen"}{" "}
+                <span className="arrow">→</span>
               </button>
             )}
-            <div className={`status-line${phase === "error" ? " error" : ""}`}>
+            <div className={`status-line${statusIsError ? " error" : ""}`}>
               {busy && <span className="pulse" />}
               {statusText}
             </div>
@@ -283,28 +377,65 @@ export default function Home() {
         </section>
 
         <section className="docpane">
+          {jobs.length > 1 && (
+            <div className="job-tabs" role="tablist" aria-label="Entwürfe">
+              {jobs.map((job) => (
+                <button
+                  key={job.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeJob?.id === job.id}
+                  className={`job-tab${activeJob?.id === job.id ? " active" : ""}`}
+                  onClick={() => setActiveId(job.id)}
+                >
+                  <span className={`job-dot ${job.phase}`} />
+                  {shortName(job.fileName)}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="doc-toolbar">
             <span>
               Entwurf ·{" "}
-              {type === "zwischenzeugnis" ? "Zwischenzeugnis" : "Arbeitszeugnis"}
+              {(activeJob?.type ?? type) === "zwischenzeugnis"
+                ? "Zwischenzeugnis"
+                : "Arbeitszeugnis"}
+              {activeJob && jobs.length > 1 ? ` · ${shortName(activeJob.fileName)}` : ""}
             </span>
             <div className="actions">
+              {doneCount > 1 && (
+                <button
+                  type="button"
+                  className="toolbtn"
+                  onClick={downloadAll}
+                  disabled={busy}
+                >
+                  Alle herunterladen ({doneCount})
+                </button>
+              )}
               <button
                 type="button"
-                className="toolbtn"
-                onClick={copyOutput}
-                disabled={!output || busy}
+                className="toolbtn primary"
+                onClick={() => activeJob && downloadJob(activeJob)}
+                disabled={!activeJob || activeJob.phase !== "done" || !activeJob.output}
               >
-                {copied ? "Kopiert ✓" : "Markdown kopieren"}
+                Word herunterladen (.docx)
               </button>
             </div>
           </div>
           <div className="doc-scroll">
-            {output ? (
-              <article className="letter">
-                {renderLetter(output)}
-                {phase === "streaming" && <span className="caret" />}
-              </article>
+            {activeJob && (activeJob.output || activeJob.phase === "error") ? (
+              activeJob.phase === "error" && !activeJob.output ? (
+                <div className="doc-empty">
+                  <div className="glyph">!</div>
+                  <p>{activeJob.error}</p>
+                </div>
+              ) : (
+                <article className="letter">
+                  {renderLetter(activeJob.output)}
+                  {activeJob.phase === "streaming" && <span className="caret" />}
+                </article>
+              )
             ) : (
               <div className="doc-empty">
                 <div className="glyph">Z</div>
