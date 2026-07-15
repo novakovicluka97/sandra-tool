@@ -716,6 +716,10 @@ a:focus-visible,
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Lock the preview height so long letters scroll inside .doc-scroll
+     rather than stretching the whole pane. */
+  min-height: 0;
+  max-height: 82vh;
 }
 
 .job-tabs {
@@ -815,18 +819,23 @@ a:focus-visible,
 }
 
 .toolbtn.primary {
-  background: var(--ink);
+  background: var(--red);
   color: var(--paper-raised);
-  border-color: var(--ink);
+  border-color: var(--red);
+  /* 20% larger than the base .toolbtn (11px / 7px 14px) */
+  font-size: 13.2px;
+  padding: 8.4px 16.8px;
 }
 
 .toolbtn.primary:hover:not(:disabled) {
-  background: var(--red);
-  border-color: var(--red);
+  background: #b91c22;
+  border-color: #b91c22;
+  color: var(--paper-raised);
 }
 
 .doc-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 36px clamp(20px, 5vw, 64px) 56px;
 }
