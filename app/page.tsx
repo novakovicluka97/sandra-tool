@@ -1,12 +1,35 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import Script from "next/script";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import type {
+  PrivacyErrorCode,
+  ProtectedForm,
+} from "@/lib/privacy";
 
+type Locale = "de" | "en";
 type LetterType = "zwischenzeugnis" | "arbeitszeugnis";
-type JobPhase = "queued" | "uploading" | "streaming" | "done" | "error";
+type GrammaticalForm = "feminine" | "masculine" | "unknown" | "";
+type FilePhase = "checking" | "ready" | "blocked";
+type JobPhase = "queued" | "sending" | "streaming" | "done" | "error";
+
+type UploadItem = {
+  id: string;
+  file: File;
+  phase: FilePhase;
+  protected?: ProtectedForm;
+  error?: PrivacyErrorCode;
+  grammaticalForm: GrammaticalForm;
+};
 
 type Job = {
-  id: number;
+  id: string;
   fileName: string;
   type: LetterType;
   phase: JobPhase;
@@ -14,10 +37,224 @@ type Job = {
   error: string;
 };
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+const COPY = {
+  de: {
+    titleLead: "Zeugnis-",
+    titleAccent: "Generator",
+    language: "Sprache",
+    how: "So funktioniert es",
+    trustTitle: "Identität bleibt lokal",
+    trustBody:
+      "Original-PDF, Namen, aufgeführte Identitätsfelder und Zuordnungsschlüssel werden nicht an Anthropic übermittelt.",
+    uploadTitle: "Zeugnisanträge auswählen",
+    dropMain: "PDFs hierher ziehen oder auswählen",
+    dropHint: "Originalformular GRP_DK_1054 · mehrere Dateien · max. 10 MB",
+    onlyPdfs: "Nur PDF-Dateien werden übernommen.",
+    checking: "Wird lokal geprüft …",
+    ready: (count: number) =>
+      `${count} ${count === 1 ? "Angabe" : "Angaben"} lokal geschützt`,
+    staysLocal: "PDF bleibt lokal",
+    payloadPreview: "Übertragungsvorschau",
+    addressLabel: "Anrede im Zeugnis",
+    addressChoose: "Bitte wählen",
+    addressFeminine: "Frau · sie / ihr",
+    addressMasculine: "Herr · er / sein",
+    addressUnknown: "Unklar · HR-Platzhalter",
+    remove: (name: string) => `${name} entfernen`,
+    privacyErrors: {
+      invalid_pdf: "Diese Datei ist kein lesbares PDF.",
+      scan_not_supported:
+        "Scan gestoppt: Ohne auslesbare Formularfelder kann die App den Datenschutz nicht garantieren. Bitte das originale ausfüllbare PDF verwenden.",
+      unknown_form:
+        "Unbekannte Formularversion gestoppt. Bitte das originale Formular GRP_DK_1054 v1.1 verwenden.",
+      file_too_large: "Das PDF ist grösser als 10 MB.",
+    },
+    typeTitle: "Zeugnisart wählen",
+    typeGroup: "Zeugnisart",
+    interim: "Zwischenzeugnis",
+    final: "Arbeitszeugnis",
+    interimDesc:
+      "Während des laufenden Arbeitsverhältnisses, durchgehend im Präsens.",
+    finalDesc:
+      "Schlusszeugnis beim Austritt, im Präteritum mit Austrittsabsatz.",
+    createTitle: "Entwürfe erstellen",
+    confirmation:
+      "Ich habe die Übertragungsvorschau geprüft. Das Formular enthält keine Patienten- oder Gesundheitsdaten.",
+    confirmHint:
+      "Arbeitsbezogene Angaben und Bewertungen werden pseudonymisiert verarbeitet.",
+    cancel: "Abbrechen",
+    createOne: "Entwurf erstellen",
+    createMany: (count: number) => `${count} Entwürfe erstellen`,
+    cancelled: "Abgebrochen.",
+    unknownError: "Unbekannter Fehler",
+    noResponse: "Keine Antwort vom Server.",
+    generationFailed: "Der Entwurf konnte nicht vollständig erstellt werden.",
+    placeholderFailed:
+      "Sicherheitsstopp: Der Entwurf hat einen lokalen Platzhalter verändert oder ausgelassen. Es wurden keine unvollständigen Personalien freigegeben.",
+    fileProgress: (current: number, total: number) =>
+      `Datei ${current} von ${total} wird verarbeitet …`,
+    sending: "Geschützte Angaben werden übermittelt …",
+    writing: "Entwurf wird geschrieben …",
+    draftsReady: "Entwürfe fertig. Bitte durch HR prüfen.",
+    partialReady: (done: number, total: number) =>
+      `${done} von ${total} Entwürfen fertig.`,
+    localCheck: "Lokale Datenschutzprüfung läuft …",
+    removeBlocked: "Blockierte Dateien entfernen, um fortzufahren.",
+    drafts: "Entwürfe",
+    downloadAll: (count: number) => `Alle herunterladen (${count})`,
+    downloadWord: "Word herunterladen (.docx)",
+    phase: {
+      queued: "wartet",
+      sending: "wird gesendet",
+      streaming: "wird erstellt",
+      done: "fertig",
+      error: "Fehler",
+    },
+    modalEyebrow: "Datenschutz durch Technikgestaltung",
+    modalTitle: "Identitätsdaten bleiben auf diesem Gerät.",
+    modalIntro:
+      "Ihr Browser schützt die Personendaten vor der Übermittlung und setzt sie erst nach dem Entwurf wieder ein.",
+    close: "Schliessen",
+    diagram: [
+      {
+        step: "01",
+        title: "Lokal geschützt",
+        body: "Das PDF wird im Browser gelesen. Namen und aufgeführte Identitätsfelder werden durch zufällige Platzhalter ersetzt.",
+        tag: "Ihr Gerät",
+      },
+      {
+        step: "02",
+        title: "Sicher entworfen",
+        body: "Anthropic erhält nur das von HR geprüfte Arbeitstranskript mit neutralen Platzhaltern.",
+        tag: "Pseudonymisiert",
+      },
+      {
+        step: "03",
+        title: "Lokal fertiggestellt",
+        body: "Der Browser setzt die Identitätsdaten wieder ein und erstellt die Word-Datei.",
+        tag: "Ihr Gerät",
+      },
+    ],
+    staysTitle: "Nie übermittelt",
+    staysItems: "Original-PDF · Name · Identitätsfelder · Zuordnungsschlüssel · Signatur",
+    sentTitle: "Für den Entwurf",
+    sentItems: "Von HR geprüftes Arbeitstranskript · neutrale Platzhalter",
+    legalDetails: "Details zu Recht und Technik",
+    legalBody:
+      "Die App setzt Datenschutz durch Technikgestaltung und Datenminimierung um. Anthropic verarbeitet ausschliesslich das freigegebene pseudonymisierte Transkript. Für den Produktivbetrieb bleiben Anbietervereinbarung, Zugriffe, Aufbewahrung und Auslandsbearbeitung durch Polymed zu genehmigen.",
+    fdpicSource: "EDÖB: Cloud-Computing",
+    anthropicSource: "Anthropic: API-Aufbewahrung",
+    understood: "Verstanden",
+  },
+  en: {
+    titleLead: "Reference ",
+    titleAccent: "Generator",
+    language: "Language",
+    how: "How it works",
+    trustTitle: "Identity stays local",
+    trustBody:
+      "The original PDF, names, listed identity fields, and replacement key are not sent to Anthropic.",
+    uploadTitle: "Select reference request forms",
+    dropMain: "Drop PDFs here or select files",
+    dropHint: "Original GRP_DK_1054 form · multiple files · max. 10 MB",
+    onlyPdfs: "Only PDF files are accepted.",
+    checking: "Checking locally …",
+    ready: (count: number) =>
+      `${count} ${count === 1 ? "value" : "values"} protected locally`,
+    staysLocal: "PDF stays local",
+    payloadPreview: "Transmission preview",
+    addressLabel: "Form of address in the letter",
+    addressChoose: "Please select",
+    addressFeminine: "Ms · she / her",
+    addressMasculine: "Mr · he / his",
+    addressUnknown: "Unclear · HR placeholder",
+    remove: (name: string) => `Remove ${name}`,
+    privacyErrors: {
+      invalid_pdf: "This file is not a readable PDF.",
+      scan_not_supported:
+        "Scan blocked: without readable form fields, the app cannot verify privacy protection. Please use the original fillable PDF.",
+      unknown_form:
+        "Unknown form version blocked. Please use the original GRP_DK_1054 v1.1 form.",
+      file_too_large: "The PDF is larger than 10 MB.",
+    },
+    typeTitle: "Choose reference type",
+    typeGroup: "Reference type",
+    interim: "Interim reference",
+    final: "Final reference",
+    interimDesc:
+      "For an ongoing employment relationship, written consistently in the present tense.",
+    finalDesc:
+      "For an employee leaving the company, written in the past tense with a departure paragraph.",
+    createTitle: "Create drafts",
+    confirmation:
+      "I reviewed the transmission preview. The form contains no patient or health information.",
+    confirmHint:
+      "Work-related details and ratings are processed in pseudonymized form.",
+    cancel: "Cancel",
+    createOne: "Create draft",
+    createMany: (count: number) => `Create ${count} drafts`,
+    cancelled: "Cancelled.",
+    unknownError: "Unknown error",
+    noResponse: "No response from the server.",
+    generationFailed: "The draft could not be completed.",
+    placeholderFailed:
+      "Safety stop: the draft changed or omitted a local placeholder. Incomplete personal details were not released.",
+    fileProgress: (current: number, total: number) =>
+      `Processing file ${current} of ${total} …`,
+    sending: "Sending protected details …",
+    writing: "Writing the draft …",
+    draftsReady: "Drafts ready. HR review is required.",
+    partialReady: (done: number, total: number) =>
+      `${done} of ${total} drafts ready.`,
+    localCheck: "Running local privacy check …",
+    removeBlocked: "Remove blocked files to continue.",
+    drafts: "Drafts",
+    downloadAll: (count: number) => `Download all (${count})`,
+    downloadWord: "Download Word (.docx)",
+    phase: {
+      queued: "waiting",
+      sending: "sending",
+      streaming: "creating",
+      done: "ready",
+      error: "error",
+    },
+    modalEyebrow: "Privacy by design",
+    modalTitle: "Employee identity stays on this device.",
+    modalIntro:
+      "Your browser protects personal details before transmission and restores them only after the draft returns.",
+    close: "Close",
+    diagram: [
+      {
+        step: "01",
+        title: "Protected locally",
+        body: "The PDF is read in the browser. Names and listed identity fields are replaced with random placeholders.",
+        tag: "Your device",
+      },
+      {
+        step: "02",
+        title: "Drafted securely",
+        body: "Anthropic receives only the HR-reviewed work transcript with neutral placeholders.",
+        tag: "Pseudonymized",
+      },
+      {
+        step: "03",
+        title: "Finished locally",
+        body: "The browser restores the identity details and creates the Word file.",
+        tag: "Your device",
+      },
+    ],
+    staysTitle: "Never transmitted",
+    staysItems: "Original PDF · name · identity fields · replacement key · signature",
+    sentTitle: "For drafting",
+    sentItems: "HR-reviewed work transcript · neutral placeholders",
+    legalDetails: "Legal and technical details",
+    legalBody:
+      "The app implements privacy by design and data minimization. Anthropic processes only the approved pseudonymized transcript. For production, Polymed must still approve the provider agreement, access controls, retention, and foreign-country processing.",
+    fdpicSource: "FDPIC: Cloud processing",
+    anthropicSource: "Anthropic: API retention",
+    understood: "Got it",
+  },
+} as const;
 
 function inline(text: string): ReactNode[] {
   return text
@@ -50,22 +287,17 @@ function renderLetter(md: string): ReactNode[] {
   };
 
   lines.forEach((line, i) => {
-    const t = line.trim();
-    if (t.startsWith("- ")) {
-      bullets.push(t.slice(2));
+    const text = line.trim();
+    if (text.startsWith("- ")) {
+      bullets.push(text.slice(2));
       return;
     }
     flush(`ul-${i}`);
-    if (t === "") return;
-    if (t === "---") {
-      blocks.push(<hr key={i} />);
-    } else if (t.startsWith("## ")) {
-      blocks.push(<h2 key={i}>{t.slice(3)}</h2>);
-    } else if (t.startsWith("# ")) {
-      blocks.push(<h1 key={i}>{t.slice(2)}</h1>);
-    } else {
-      blocks.push(<p key={i}>{inline(t)}</p>);
-    }
+    if (!text) return;
+    if (text === "---") blocks.push(<hr key={i} />);
+    else if (text.startsWith("## ")) blocks.push(<h2 key={i}>{text.slice(3)}</h2>);
+    else if (text.startsWith("# ")) blocks.push(<h1 key={i}>{text.slice(2)}</h1>);
+    else blocks.push(<p key={i}>{inline(text)}</p>);
   });
   flush("ul-end");
   return blocks;
@@ -76,88 +308,278 @@ function shortName(name: string): string {
   return base.length > 22 ? `${base.slice(0, 20)}…` : base;
 }
 
+function restoreLocally(text: string, replacements: Record<string, string>): string {
+  return Object.entries(replacements).reduce(
+    (result, [token, value]) => result.split(token).join(value),
+    text,
+  );
+}
+
+function outboundTranscript(item: UploadItem): string {
+  if (!item.protected) return "";
+  const grammatical =
+    item.grammaticalForm === "feminine"
+      ? "feminin (Frau, sie/ihr)"
+      : item.grammaticalForm === "masculine"
+        ? "maskulin (Herr, er/sein)"
+        : "unklar (geschlechtsneutrale Formulierung oder HR-Platzhalter verwenden)";
+  return `${item.protected.transcript}\n\n## Grammatische Form (von HR lokal bestätigt)\n- ${grammatical}`;
+}
+
+function modelTokensAreValid(
+  rawText: string,
+  replacements: Record<string, string>,
+  type: LetterType,
+): boolean {
+  if (rawText.includes("[[BEISPIEL_")) return false;
+  const knownTokens = new Set(Object.keys(replacements));
+  const returnedTokens = rawText.match(/\[\[LOCAL_[A-Z0-9_]+\]\]/gu) ?? [];
+  if (returnedTokens.some((token) => !knownTokens.has(token))) return false;
+
+  const requiredLabels = [
+    "VORNAME",
+    "NACHNAME",
+    "GEBURTSDATUM",
+    "HEIMATORT",
+    "VORGESETZTE_PERSON",
+    "EINTRITTSDATUM",
+    "UEBERTRITTSDATUM",
+    "AUSSTELLUNGSDATUM",
+    "HR_SIGNATORY",
+  ];
+  if (type === "arbeitszeugnis") requiredLabels.push("AUSTRITTSDATUM");
+
+  for (const label of requiredLabels) {
+    const token = Array.from(knownTokens).find((candidate) =>
+      candidate.includes(`_${label}`),
+    );
+    if (token && !rawText.includes(token)) return false;
+  }
+
+  const restored = restoreLocally(rawText, replacements);
+  return !/\[\[?\s*LOCAL_|LOCAL_[A-Z0-9_]+/iu.test(restored);
+}
+
+function PrivacyFlowIcon({ step }: { step: number }) {
+  if (step === 0) {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <rect x="5" y="8" width="38" height="27" rx="2" />
+        <path d="M5 15h38M17 41h14M24 35v6" />
+        <path className="accent" d="m19 24 4 4 8-9" />
+      </svg>
+    );
+  }
+  if (step === 1) {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <path d="M12 7h18l7 7v27H12zM30 7v8h7" />
+        <path d="M18 24h13M18 30h13M18 36h8" />
+        <path className="accent" d="m39 19 1.4 3.6L44 24l-3.6 1.4L39 29l-1.4-3.6L34 24l3.6-1.4z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M10 7h19l8 8v26H10zM29 7v9h8" />
+      <path d="M17 25h13M17 31h9" />
+      <path className="accent" d="m28 35 4 4 9-11" />
+    </svg>
+  );
+}
+
 export default function Home() {
-  const [files, setFiles] = useState<File[]>([]);
+  const [locale, setLocale] = useState<Locale>("de");
+  const [items, setItems] = useState<UploadItem[]>([]);
   const [type, setType] = useState<LetterType>("zwischenzeugnis");
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [activeId, setActiveId] = useState<number>(0);
+  const [activeId, setActiveId] = useState("");
   const [busy, setBusy] = useState(false);
   const [pickError, setPickError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
+  const privacyDialogRef = useRef<HTMLDialogElement | null>(null);
 
-  const activeJob = jobs.find((j) => j.id === activeId) ?? jobs[0] ?? null;
+  const c = COPY[locale];
+  const activeJob = jobs.find((job) => job.id === activeId) ?? jobs[0] ?? null;
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("sandra-ui-locale");
+    if (saved === "de" || saved === "en") setLocale(saved);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale === "de" ? "de-CH" : "en";
+    document.title =
+      locale === "de"
+        ? "Zeugnis-Generator · Polymed"
+        : "Reference Generator · Polymed";
+    window.localStorage.setItem("sandra-ui-locale", locale);
+  }, [locale]);
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024 * 1024) {
+      return `${new Intl.NumberFormat(locale === "de" ? "de-CH" : "en", {
+        maximumFractionDigits: 0,
+      }).format(bytes / 1024)} KB`;
+    }
+    return `${new Intl.NumberFormat(locale === "de" ? "de-CH" : "en", {
+      maximumFractionDigits: 1,
+    }).format(bytes / (1024 * 1024))} MB`;
+  }
+
+  async function inspectItem(item: UploadItem) {
+    try {
+      const { protectPdfLocally } = await import("@/lib/privacy");
+      const protectedForm = await protectPdfLocally(item.file);
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === item.id
+            ? {
+                ...candidate,
+                phase: "ready",
+                protected: protectedForm,
+                grammaticalForm: protectedForm.suggestedGrammaticalForm,
+                error: undefined,
+              }
+            : candidate,
+        ),
+      );
+    } catch (error) {
+      const code: PrivacyErrorCode =
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string"
+          ? (error.code as PrivacyErrorCode)
+          : "invalid_pdf";
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === item.id
+            ? { ...candidate, phase: "blocked", error: code, protected: undefined }
+            : candidate,
+        ),
+      );
+    }
+  }
 
   function acceptFiles(list: FileList | File[] | null | undefined) {
     if (!list || list.length === 0) return;
     const incoming = Array.from(list);
     const pdfs = incoming.filter(
-      (f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf",
+      (file) =>
+        file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf",
     );
-    setPickError(
-      pdfs.length < incoming.length ? "Nur PDF-Dateien werden übernommen." : "",
-    );
+    setPickError(pdfs.length < incoming.length ? c.onlyPdfs : "");
     if (pdfs.length === 0) return;
-    setFiles((prev) => {
-      const known = new Set(prev.map((f) => `${f.name}|${f.size}`));
-      return [...prev, ...pdfs.filter((f) => !known.has(`${f.name}|${f.size}`))];
-    });
+
+    const known = new Set(items.map((item) => `${item.file.name}|${item.file.size}`));
+    const nextItems = pdfs
+      .filter((file) => !known.has(`${file.name}|${file.size}`))
+      .map<UploadItem>((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        phase: "checking",
+        grammaticalForm: "",
+      }));
+    if (nextItems.length === 0) return;
+    setConfirmed(false);
+    setItems((current) => [...current, ...nextItems]);
+    nextItems.forEach((item) => void inspectItem(item));
   }
 
-  function removeFile(index: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
+  function removeItem(id: string) {
+    setConfirmed(false);
+    setItems((current) => current.filter((item) => item.id !== id));
   }
 
-  function patchJob(id: number, patch: Partial<Job>) {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  function patchJob(id: string, patch: Partial<Job>) {
+    setJobs((current) =>
+      current.map((job) => (job.id === id ? { ...job, ...patch } : job)),
+    );
   }
 
-  async function runJob(job: Job, file: File, controller: AbortController) {
-    patchJob(job.id, { phase: "uploading" });
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("type", job.type);
-
-    const res = await fetch("/api/generate", {
+  async function runJob(
+    job: Job,
+    item: UploadItem & { protected: ProtectedForm },
+    controller: AbortController,
+  ) {
+    const protectedForm = item.protected;
+    patchJob(job.id, { phase: "sending" });
+    const response = await fetch("/api/generate", {
       method: "POST",
-      body: form,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: job.type,
+        locale,
+        protocol: protectedForm.protocol,
+        transcript: outboundTranscript(item),
+      }),
       signal: controller.signal,
     });
 
-    if (!res.ok) {
-      let message = `Fehler ${res.status}`;
+    if (!response.ok) {
+      let message = `${locale === "de" ? "Fehler" : "Error"} ${response.status}`;
       try {
-        const data = await res.json();
+        const data = await response.json();
         if (data?.error) message = data.error;
       } catch {}
       throw new Error(message);
     }
-    if (!res.body) throw new Error("Keine Antwort vom Server.");
+    if (!response.body) throw new Error(c.noResponse);
 
     patchJob(job.id, { phase: "streaming" });
-    const reader = res.body.getReader();
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let text = "";
+    let rawText = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      text += decoder.decode(value, { stream: true });
-      patchJob(job.id, { output: text });
+      rawText += decoder.decode(value, { stream: true });
+      patchJob(job.id, {
+        output: restoreLocally(rawText, protectedForm.replacements),
+      });
     }
-    text += decoder.decode();
-    patchJob(job.id, { output: text, phase: "done" });
+    rawText += decoder.decode();
+
+    const failed = /\[(?:FEHLER|ERROR):[^\]]+\]/u.test(rawText);
+    const cleanText = rawText.replace(
+      /\n*\[(?:FEHLER|ERROR):[^\]]+\]\s*$/u,
+      "",
+    );
+    const tokensValid = modelTokensAreValid(
+      cleanText,
+      protectedForm.replacements,
+      job.type,
+    );
+    patchJob(job.id, {
+      output: restoreLocally(cleanText, protectedForm.replacements),
+      phase: failed || !tokensValid ? "error" : "done",
+      error: failed ? c.generationFailed : !tokensValid ? c.placeholderFailed : "",
+    });
   }
 
   async function generate() {
-    if (files.length === 0 || busy) return;
+    const readyItems = items.filter(
+      (item): item is UploadItem & { protected: ProtectedForm } =>
+        item.phase === "ready" && Boolean(item.protected) && item.grammaticalForm !== "",
+    );
+    if (
+      readyItems.length === 0 ||
+      readyItems.length !== items.length ||
+      !confirmed ||
+      busy
+    ) {
+      return;
+    }
+
     setBusy(true);
     cancelledRef.current = false;
-
-    const newJobs: Job[] = files.map((f, i) => ({
-      id: Date.now() + i,
-      fileName: f.name,
+    const newJobs: Job[] = readyItems.map((item) => ({
+      id: item.id,
+      fileName: item.file.name,
       type,
       phase: "queued",
       output: "",
@@ -166,24 +588,24 @@ export default function Home() {
     setJobs(newJobs);
     setActiveId(newJobs[0].id);
 
-    for (let i = 0; i < newJobs.length; i++) {
+    for (let index = 0; index < newJobs.length; index += 1) {
       if (cancelledRef.current) {
-        patchJob(newJobs[i].id, { phase: "error", error: "Abgebrochen." });
+        patchJob(newJobs[index].id, { phase: "error", error: c.cancelled });
         continue;
       }
       const controller = new AbortController();
       abortRef.current = controller;
-      setActiveId(newJobs[i].id);
+      setActiveId(newJobs[index].id);
       try {
-        await runJob(newJobs[i], files[i], controller);
-      } catch (err) {
-        patchJob(newJobs[i].id, {
+        await runJob(newJobs[index], readyItems[index], controller);
+      } catch (error) {
+        patchJob(newJobs[index].id, {
           phase: "error",
           error: controller.signal.aborted
-            ? "Abgebrochen."
-            : err instanceof Error
-              ? err.message
-              : "Unbekannter Fehler",
+            ? c.cancelled
+            : error instanceof Error
+              ? error.message
+              : c.unknownError,
         });
       }
     }
@@ -201,12 +623,12 @@ export default function Home() {
     const { letterToDocxBlob, letterFilename } = await import("@/lib/docx");
     const blob = await letterToDocxBlob(job.output);
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = letterFilename(job.output, job.type, job.fileName);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = letterFilename(job.output, job.type, job.fileName);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     URL.revokeObjectURL(url);
   }
 
@@ -214,245 +636,533 @@ export default function Home() {
     for (const job of jobs) {
       if (job.phase === "done" && job.output) {
         await downloadJob(job);
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
       }
     }
   }
 
-  const doneCount = jobs.filter((j) => j.phase === "done").length;
+  function handleTabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = (index + direction + jobs.length) % jobs.length;
+    setActiveId(jobs[next].id);
+    document.getElementById(`job-tab-${jobs[next].id}`)?.focus();
+  }
+
+  const doneCount = jobs.filter((job) => job.phase === "done").length;
   const runningIndex = jobs.findIndex(
-    (j) => j.phase === "uploading" || j.phase === "streaming",
+    (job) => job.phase === "sending" || job.phase === "streaming",
   );
+  const hasChecking = items.some((item) => item.phase === "checking");
+  const hasBlocked = items.some((item) => item.phase === "blocked");
+  const allReady =
+    items.length > 0 &&
+    items.every((item) => item.phase === "ready" && item.grammaticalForm !== "");
 
   const statusText = busy
     ? jobs.length > 1
-      ? `Datei ${runningIndex + 1} von ${jobs.length} wird verarbeitet …`
-      : runningIndex >= 0 && jobs[runningIndex].phase === "uploading"
-        ? "Formular wird gelesen …"
-        : "Entwurf wird geschrieben …"
-    : jobs.length > 0
-      ? doneCount === jobs.length
-        ? "Entwürfe fertig. Bitte prüfen."
-        : doneCount > 0
-          ? `${doneCount} von ${jobs.length} Entwürfen fertig.`
-          : jobs.some((j) => j.phase === "error")
-            ? (jobs.find((j) => j.phase === "error")?.error ?? "Fehler")
-            : ""
-      : pickError;
+      ? c.fileProgress(runningIndex + 1, jobs.length)
+      : runningIndex >= 0 && jobs[runningIndex].phase === "sending"
+        ? c.sending
+        : c.writing
+    : hasChecking
+      ? c.localCheck
+      : hasBlocked
+        ? c.removeBlocked
+        : jobs.length > 0
+          ? doneCount === jobs.length
+            ? c.draftsReady
+            : doneCount > 0
+              ? c.partialReady(doneCount, jobs.length)
+              : jobs.find((job) => job.phase === "error")?.error ?? ""
+          : pickError;
 
   const statusIsError =
-    !busy && (pickError !== "" || (jobs.length > 0 && doneCount === 0 && jobs.some((j) => j.phase === "error")));
+    !busy &&
+    (Boolean(pickError) ||
+      hasBlocked ||
+      (jobs.length > 0 && jobs.some((job) => job.phase === "error")));
 
   return (
     <div className="frame">
       <header className="masthead">
         <div className="masthead-left">
-          <div className="mark">Z</div>
-          <div>
-            <h1>
-              Zeugnis-<em>Generator</em>
-            </h1>
-            <div className="masthead-sub">
-              Polymed Medical Center AG · Entwurfswerkzeug für HR
-            </div>
-          </div>
+          <div className="mark" aria-hidden="true">Z</div>
+          <h1>
+            {c.titleLead}<em>{c.titleAccent}</em>
+          </h1>
         </div>
-        <div className="masthead-right">
-          <span>Prototyp</span>
+        <div className="masthead-actions">
+          <button
+            type="button"
+            className="how-button"
+            onClick={() => privacyDialogRef.current?.showModal()}
+          >
+            <span className="shield-mini" aria-hidden="true">◆</span>
+            {c.how}
+          </button>
+          <div className="language-toggle" role="group" aria-label={c.language}>
+            <button
+              type="button"
+              className={locale === "de" ? "active" : ""}
+              aria-pressed={locale === "de"}
+              onClick={() => setLocale("de")}
+              disabled={busy}
+            >
+              DE
+            </button>
+            <button
+              type="button"
+              className={locale === "en" ? "active" : ""}
+              aria-pressed={locale === "en"}
+              onClick={() => setLocale("en")}
+              disabled={busy}
+            >
+              EN
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="workbench">
-        <section className="controls">
+      <section className="trustbar" aria-label={c.trustTitle}>
+        <div className="trust-icon" aria-hidden="true">
+          <span>✓</span>
+        </div>
+        <div>
+          <strong>{c.trustTitle}</strong>
+          <p>{c.trustBody}</p>
+        </div>
+        <button
+          type="button"
+          className="trust-link"
+          onClick={() => privacyDialogRef.current?.showModal()}
+        >
+          {c.how} <span aria-hidden="true">→</span>
+        </button>
+      </section>
+
+      <main
+        className={`workbench${jobs.length === 0 ? " no-draft" : ""}`}
+        aria-busy={busy || hasChecking}
+      >
+        <section className="controls" aria-label={c.createTitle}>
           <div className="step">
             <div className="step-label">
               <span className="step-num">01</span>
-              <span className="step-title">Zeugnisanträge hochladen</span>
+              <h2 className="step-title">{c.uploadTitle}</h2>
             </div>
             <label
-              className={`dropzone${dragging ? " dragging" : ""}`}
-              onDragOver={(e) => {
-                e.preventDefault();
+              className={`dropzone${dragging ? " dragging" : ""}${busy ? " disabled" : ""}`}
+              onDragOver={(event) => {
+                event.preventDefault();
                 setDragging(true);
               }}
               onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
+              onDrop={(event) => {
+                event.preventDefault();
                 setDragging(false);
-                acceptFiles(e.dataTransfer.files);
+                acceptFiles(event.dataTransfer.files);
               }}
             >
               <input
                 type="file"
                 accept=".pdf,application/pdf"
                 multiple
-                onChange={(e) => {
-                  acceptFiles(e.target.files);
-                  e.target.value = "";
+                onChange={(event) => {
+                  acceptFiles(event.target.files);
+                  event.target.value = "";
                 }}
                 disabled={busy}
               />
-              <div className="dropzone-icon">⇪</div>
-              <div className="dropzone-main">
-                PDFs hierher ziehen oder klicken
-              </div>
-              <div className="dropzone-hint">
-                Formular GRP_DK_1054 · mehrere Dateien möglich · max. 10 MB
-              </div>
+              <div className="dropzone-icon" aria-hidden="true">⇪</div>
+              <div className="dropzone-main">{c.dropMain}</div>
+              <div className="dropzone-hint">{c.dropHint}</div>
             </label>
-            {files.map((f, i) => (
-              <div className="file-chip" key={`${f.name}-${f.size}-${i}`}>
-                <span className="name">{f.name}</span>
-                <span className="size">{formatSize(f.size)}</span>
-                <button
-                  type="button"
-                  className="chip-remove"
-                  onClick={() => removeFile(i)}
-                  disabled={busy}
-                  aria-label={`${f.name} entfernen`}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
+
+            <div className="file-list">
+              {items.map((item) => (
+                <div className={`file-card ${item.phase}`} key={item.id}>
+                  <div className="file-chip">
+                    <div className="file-copy">
+                      <span className="name">{item.file.name}</span>
+                      <span className="size">{formatSize(item.file.size)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="chip-remove"
+                      onClick={() => removeItem(item.id)}
+                      disabled={busy}
+                      aria-label={c.remove(item.file.name)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div
+                    className="file-privacy"
+                    role={item.phase === "blocked" ? "alert" : "status"}
+                  >
+                    <span className={`privacy-dot ${item.phase}`} aria-hidden="true" />
+                    {item.phase === "checking" && c.checking}
+                    {item.phase === "ready" && item.protected && (
+                      <>
+                        <strong>{c.ready(item.protected.protectedValueCount)}</strong>
+                        <span>· {c.staysLocal}</span>
+                      </>
+                    )}
+                    {item.phase === "blocked" && item.error && c.privacyErrors[item.error]}
+                  </div>
+                  {item.phase === "ready" && item.protected && (
+                    <>
+                      <label className="address-field">
+                        <span>{c.addressLabel}</span>
+                        <select
+                          value={item.grammaticalForm}
+                          onChange={(event) => {
+                            setConfirmed(false);
+                            setItems((current) =>
+                              current.map((candidate) =>
+                                candidate.id === item.id
+                                  ? {
+                                      ...candidate,
+                                      grammaticalForm: event.target.value as GrammaticalForm,
+                                    }
+                                  : candidate,
+                              ),
+                            );
+                          }}
+                          disabled={busy}
+                        >
+                          <option value="">{c.addressChoose}</option>
+                          <option value="feminine">{c.addressFeminine}</option>
+                          <option value="masculine">{c.addressMasculine}</option>
+                          <option value="unknown">{c.addressUnknown}</option>
+                        </select>
+                      </label>
+                      <details className="payload-details">
+                        <summary>{c.payloadPreview}</summary>
+                        <div className="payload-note">{c.confirmHint}</div>
+                        <pre>{outboundTranscript(item)}</pre>
+                      </details>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="step">
             <div className="step-label">
               <span className="step-num">02</span>
-              <span className="step-title">Zeugnisart wählen</span>
+              <h2 className="step-title">{c.typeTitle}</h2>
             </div>
-            <div className="type-toggle" role="radiogroup" aria-label="Zeugnisart">
-              <button
-                type="button"
-                className={type === "zwischenzeugnis" ? "active" : ""}
-                onClick={() => setType("zwischenzeugnis")}
-                disabled={busy}
-              >
-                Zwischen&shy;zeugnis
-              </button>
-              <button
-                type="button"
-                className={type === "arbeitszeugnis" ? "active" : ""}
-                onClick={() => setType("arbeitszeugnis")}
-                disabled={busy}
-              >
-                Arbeits&shy;zeugnis
-              </button>
+            <div className="type-toggle" role="radiogroup" aria-label={c.typeGroup}>
+              <label className={type === "zwischenzeugnis" ? "active" : ""}>
+                <input
+                  type="radio"
+                  name="letter-type"
+                  value="zwischenzeugnis"
+                  checked={type === "zwischenzeugnis"}
+                  onChange={() => setType("zwischenzeugnis")}
+                  disabled={busy}
+                />
+                <span>{c.interim}</span>
+              </label>
+              <label className={type === "arbeitszeugnis" ? "active" : ""}>
+                <input
+                  type="radio"
+                  name="letter-type"
+                  value="arbeitszeugnis"
+                  checked={type === "arbeitszeugnis"}
+                  onChange={() => setType("arbeitszeugnis")}
+                  disabled={busy}
+                />
+                <span>{c.final}</span>
+              </label>
             </div>
             <p className="type-desc">
-              {type === "zwischenzeugnis"
-                ? "Während des laufenden Arbeitsverhältnisses, durchgehend im Präsens."
-                : "Schlusszeugnis beim Austritt, durchgehend im Präteritum, mit Austrittsabsatz."}
+              {type === "zwischenzeugnis" ? c.interimDesc : c.finalDesc}
             </p>
           </div>
 
-          <div className="step">
+          <div className="step generate-step">
             <div className="step-label">
               <span className="step-num">03</span>
-              <span className="step-title">Entwürfe erstellen</span>
+              <h2 className="step-title">{c.createTitle}</h2>
             </div>
+            <label
+              className={`privacy-confirm${allReady && !busy ? " available" : ""}`}
+            >
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(event) => setConfirmed(event.target.checked)}
+                disabled={!allReady || busy}
+              />
+              <span>
+                {c.confirmation}
+                <small>{c.confirmHint}</small>
+              </span>
+            </label>
             {busy ? (
               <button type="button" className="generate" onClick={cancel}>
-                Abbrechen
+                {c.cancel}
               </button>
             ) : (
               <button
                 type="button"
                 className="generate"
                 onClick={generate}
-                disabled={files.length === 0}
+                disabled={!allReady || !confirmed}
               >
-                {files.length > 1
-                  ? `${files.length} Entwürfe erstellen`
-                  : "Entwurf erstellen"}{" "}
-                <span className="arrow">→</span>
+                {items.length > 1 ? c.createMany(items.length) : c.createOne}
+                <span className="arrow" aria-hidden="true">→</span>
               </button>
             )}
-            <div className={`status-line${statusIsError ? " error" : ""}`}>
-              {busy && <span className="pulse" />}
+            <div
+              className={`status-line${statusIsError ? " error" : ""}`}
+              aria-live="polite"
+              role={statusIsError ? "alert" : "status"}
+            >
+              {(busy || hasChecking) && <span className="pulse" aria-hidden="true" />}
               {statusText}
             </div>
           </div>
         </section>
 
-        <section className="docpane">
-          {jobs.length > 1 && (
-            <div className="job-tabs" role="tablist" aria-label="Entwürfe">
-              {jobs.map((job) => (
-                <button
-                  key={job.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeJob?.id === job.id}
-                  className={`job-tab${activeJob?.id === job.id ? " active" : ""}`}
-                  onClick={() => setActiveId(job.id)}
-                >
-                  <span className={`job-dot ${job.phase}`} />
-                  {shortName(job.fileName)}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="doc-toolbar">
-            <span>
-              Entwurf ·{" "}
-              {(activeJob?.type ?? type) === "zwischenzeugnis"
-                ? "Zwischenzeugnis"
-                : "Arbeitszeugnis"}
-              {activeJob && jobs.length > 1 ? ` · ${shortName(activeJob.fileName)}` : ""}
-            </span>
-            <div className="actions">
-              {doneCount > 1 && (
-                <button
-                  type="button"
-                  className="toolbtn"
-                  onClick={downloadAll}
-                  disabled={busy}
-                >
-                  Alle herunterladen ({doneCount})
-                </button>
-              )}
-              <button
-                type="button"
-                className="toolbtn primary"
-                onClick={() => activeJob && downloadJob(activeJob)}
-                disabled={!activeJob || activeJob.phase !== "done" || !activeJob.output}
-              >
-                Word herunterladen (.docx)
-              </button>
-            </div>
-          </div>
-          <div className="doc-scroll">
-            {activeJob && (activeJob.output || activeJob.phase === "error") ? (
-              activeJob.phase === "error" && !activeJob.output ? (
-                <div className="doc-empty">
-                  <div className="glyph">!</div>
-                  <p>{activeJob.error}</p>
-                </div>
-              ) : (
-                <article className="letter">
-                  {renderLetter(activeJob.output)}
-                  {activeJob.phase === "streaming" && <span className="caret" />}
-                </article>
-              )
-            ) : (
-              <div className="doc-empty">
-                <div className="glyph">Z</div>
-                <p>
-                  Hier erscheint der Zeugnisentwurf, sobald ein Zeugnisantrag
-                  hochgeladen und die Erstellung gestartet wurde.
-                </p>
+        {jobs.length > 0 && (
+          <section className="docpane" aria-label={c.drafts}>
+            {jobs.length > 1 && (
+              <div className="job-tabs" role="tablist" aria-label={c.drafts}>
+                {jobs.map((job, index) => (
+                  <button
+                    id={`job-tab-${job.id}`}
+                    key={job.id}
+                    type="button"
+                    role="tab"
+                    tabIndex={activeJob?.id === job.id ? 0 : -1}
+                    aria-selected={activeJob?.id === job.id}
+                    aria-controls="draft-panel"
+                    aria-label={`${job.fileName}, ${c.phase[job.phase]}`}
+                    title={job.fileName}
+                    className={`job-tab${activeJob?.id === job.id ? " active" : ""}`}
+                    onClick={() => setActiveId(job.id)}
+                    onKeyDown={(event) => handleTabKey(event, index)}
+                  >
+                    <span className={`job-dot ${job.phase}`} aria-hidden="true" />
+                    <span>{shortName(job.fileName)}</span>
+                    <span className="sr-only">, {c.phase[job.phase]}</span>
+                  </button>
+                ))}
               </div>
             )}
-          </div>
-        </section>
+            {(doneCount > 1 ||
+              (activeJob?.phase === "done" && Boolean(activeJob.output))) && (
+              <div className="doc-toolbar">
+                <div className="actions">
+                  {doneCount > 1 && (
+                    <button
+                      type="button"
+                      className="toolbtn"
+                      onClick={downloadAll}
+                      disabled={busy}
+                    >
+                      {c.downloadAll(doneCount)}
+                    </button>
+                  )}
+                  {activeJob?.phase === "done" && activeJob.output && (
+                    <button
+                      type="button"
+                      className="toolbtn primary"
+                      onClick={() => downloadJob(activeJob)}
+                      disabled={busy}
+                    >
+                      {c.downloadWord}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            <div
+              id="draft-panel"
+              className="doc-scroll"
+              role={jobs.length > 1 ? "tabpanel" : undefined}
+              aria-labelledby={
+                jobs.length > 1 && activeJob ? `job-tab-${activeJob.id}` : undefined
+              }
+            >
+              {activeJob && (activeJob.output || activeJob.phase === "error") ? (
+                activeJob.phase === "error" && !activeJob.output ? (
+                  <div className="doc-empty error-state">
+                    <div className="glyph" aria-hidden="true">!</div>
+                    <p>{activeJob.error}</p>
+                  </div>
+                ) : (
+                  <article className="letter" lang="de-CH">
+                    {renderLetter(activeJob.output)}
+                    {activeJob.phase === "streaming" && (
+                      <span className="caret" aria-hidden="true" />
+                    )}
+                    {activeJob.phase === "error" && activeJob.error && (
+                      <p className="letter-error">{activeJob.error}</p>
+                    )}
+                  </article>
+                )
+              ) : activeJob ? (
+                <div className="draft-skeleton" aria-hidden="true">
+                  <span className="skeleton-title" />
+                  <span />
+                  <span />
+                  <span className="short" />
+                  <span />
+                  <span className="medium" />
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
       </main>
 
-      <footer className="colophon">
-        <span>Ausgabe ist ein Entwurf · Prüfung durch HR zwingend</span>
-        <span>Art. 330a OR · Kalibrierte Zeugnissprache</span>
+      <footer className="contact-footer">
+        <section className="calendar-panel" aria-labelledby="contact-heading">
+          <h2 id="contact-heading">Contact me</h2>
+          <div
+            className="calendly-inline-widget"
+            data-url="https://calendly.com/novakovicluka97/30min?utm_source=sandra_tool&utm_medium=website&utm_campaign=polymed_demo"
+          />
+          <Script
+            src="https://assets.calendly.com/assets/external/widget.js"
+            strategy="lazyOnload"
+          />
+        </section>
+
+        <address className="contact-details">
+          <div className="made-by">
+            <span>Made by:</span>
+            <strong>Luka Novakovic</strong>
+            <span>(Magnum Opus LLC)</span>
+          </div>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd>
+                <a href="mailto:novakovicluka97@gmail.com">
+                  novakovicluka97@gmail.com
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>Portfolio</dt>
+              <dd>
+                <a href="https://novakovicluka.com" target="_blank" rel="noreferrer">
+                  novakovicluka.com
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>Whatsapp</dt>
+              <dd>
+                <a href="https://wa.me/381652054445" target="_blank" rel="noreferrer">
+                  +381 65 205 4445
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>US-number</dt>
+              <dd>
+                <a href="tel:+12163501112">(216) 350-1112</a>
+              </dd>
+            </div>
+          </dl>
+        </address>
       </footer>
+
+      <dialog
+        ref={privacyDialogRef}
+        className="privacy-dialog"
+        aria-labelledby="privacy-title"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) event.currentTarget.close();
+        }}
+      >
+        <div className="dialog-shell">
+          <button
+            type="button"
+            className="dialog-close"
+            aria-label={c.close}
+            onClick={() => privacyDialogRef.current?.close()}
+          >
+            ×
+          </button>
+          <div className="dialog-heading">
+            <span className="dialog-eyebrow">{c.modalEyebrow}</span>
+            <h2 id="privacy-title">{c.modalTitle}</h2>
+            <p>{c.modalIntro}</p>
+          </div>
+
+          <ol className="privacy-flow">
+            {c.diagram.map((node, index) => (
+              <li className={index === 1 ? "external" : "local"} key={node.step}>
+                <div className="flow-topline">
+                  <span className="flow-step">{node.step}</span>
+                  <span className="flow-tag">{node.tag}</span>
+                </div>
+                <div className="flow-icon">
+                  <PrivacyFlowIcon step={index} />
+                </div>
+                <h3>{node.title}</h3>
+                <p>{node.body}</p>
+                {index < c.diagram.length - 1 && (
+                  <span className="flow-arrow" aria-hidden="true">→</span>
+                )}
+              </li>
+            ))}
+          </ol>
+
+          <div className="data-boundary">
+            <div>
+              <span className="boundary-label local">{c.staysTitle}</span>
+              <p>{c.staysItems}</p>
+            </div>
+            <div>
+              <span className="boundary-label external">{c.sentTitle}</span>
+              <p>{c.sentItems}</p>
+            </div>
+          </div>
+
+          <details className="legal-details">
+            <summary>
+              <span aria-hidden="true">✓</span>
+              {c.legalDetails}
+            </summary>
+            <p>{c.legalBody}</p>
+            <div className="source-links">
+              <a
+                href="https://www.edoeb.admin.ch/en/data-processing-in-the-cloud"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {c.fdpicSource}
+              </a>
+              <a
+                href="https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {c.anthropicSource}
+              </a>
+            </div>
+          </details>
+
+          <button
+            type="button"
+            className="understood"
+            onClick={() => privacyDialogRef.current?.close()}
+          >
+            {c.understood}
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }

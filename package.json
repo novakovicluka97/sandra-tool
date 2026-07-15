@@ -7,13 +7,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test:privacy": "tsx --test tests/*.test.ts",
     "eval": "node scripts/run-all.mjs",
     "generate": "node scripts/generate.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
+    "@anthropic-ai/sdk": "^0.111.0",
     "docx": "^9.7.1",
     "next": "^15.3.3",
+    "pdf-lib": "^1.17.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -21,6 +23,10 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.5.0"
+  },
+  "overrides": {
+    "postcss": "8.5.19"
   }
 }

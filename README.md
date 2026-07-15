@@ -1,14 +1,15 @@
 # Sandra-Tool — Swiss Zeugnis Generator
 
-Generates drafts of Swiss employment references (**Zwischenzeugnis** / **Arbeitszeugnis**) from scanned *Zeugnisantrag* forms (GRP_DK_1054) via the Anthropic API. One repo, two entry points:
+Generates drafts of Swiss employment references (**Zwischenzeugnis** / **Arbeitszeugnis**) from the fillable *Zeugnisantrag* form (GRP_DK_1054) via the Anthropic API. The web workflow protects direct identifiers in the browser before any network request. One repo, two entry points:
 
-- **Web app** (Next.js): upload a form PDF, pick the letter type, get a streamed draft for HR review.
+- **Web app** (Next.js): select a form PDF, inspect the locally pseudonymised payload, pick the letter type, and get a streamed draft for HR review.
 - **Eval harness** (CLI): runs a 12-case test matrix against real HR letters and Swiss legal principles (Art. 330a OR).
 
 ## Layout
 
 ```
 app/                         Next.js App Router UI + POST /api/generate (streams the draft)
+lib/privacy.ts               Browser-only form extraction, placeholder vault, and reinsertion
 prompts/system-zeugnis.md    German system prompt: legal rules, calibration table, structure, output contract
 prompts/style-rules.md       Binding style rules (no em-dashes, natural HR register, signature block format)
 prompts/company-config.md    Polymed boilerplate: company paragraph, signatory rules, abbreviations
@@ -22,7 +23,9 @@ eval/outputs-v1/             Prompt-v1 outputs, kept for comparison
 eval/rubric.md               Law-anchored grading rubric (7 weighted dimensions, hard-fail overrides)
 eval/comparison.md           Developer session's honest evaluation
 eval/VALIDATION-PROTOCOL.md  How to run an unbiased second evaluation in a fresh AI session
-training-data/               Original scanned forms and real HR letters (PDF/DOCX)
+training-data/               Original fillable/flattened forms and HR letters (PDF/DOCX)
+tests/privacy.test.ts        No-API leakage and fail-closed privacy tests
+PRIVACY.md                   Architecture, claim boundary, and production compliance checklist
 ```
 
 ## Run the web app
@@ -33,9 +36,12 @@ Requires Node 22+ and `ANTHROPIC_API_KEY` in `.env.local` (or `.env`).
 npm install
 npm run dev        # http://localhost:3000
 npm run build      # production build
+npm run test:privacy
 ```
 
-The app sends the uploaded PDF natively to `claude-opus-4-8` with adaptive thinking and streams the draft back. Prompt and example `.md` files are read from disk at runtime (`next.config.mjs` includes them in the serverless bundle for Vercel).
+The app reads the known 149-field AcroForm locally and validates its exact schema fingerprint. It sends only a reviewed text transcript containing random placeholders plus the work-related fields required for drafting. The API route rejects multipart/file requests, extra JSON fields, malformed protected lines, raw PDF signatures, unknown privacy-protocol versions, and common direct identifiers. The original PDF, filename, signature, and replacement map stay in browser memory. Named examples and signatory configuration are pseudonymised at runtime before the provider prompt is built. Prompt and example `.md` files are read from disk at runtime (`next.config.mjs` includes them in the serverless bundle for Vercel).
+
+Flattened scans and unknown form versions are deliberately blocked because deterministic protection cannot be verified. There is no raw-PDF fallback. See [`PRIVACY.md`](PRIVACY.md) for the exact boundary and the checks still required before production use.
 
 ## Run the eval harness
 
@@ -69,5 +75,6 @@ Harness default model: `claude-sonnet-5`. Real form PDFs are sent to the API nat
 - Text/Markdown output only — no .docx/PDF rendering, letterhead, or signatures yet.
 - Company config is hardcoded to Polymed.
 - Only one real Arbeitszeugnis exists in the training data; AZ generation for non-Biafora cases relies on the prompt rules plus one example.
-- Personal data flows to the Anthropic API unpseudonymized (fine for this fake-data test; production posture documented in the project consultation).
+- Web protection currently supports only the exact fillable GRP_DK_1054 v1.1 schema. Flattened scans require a future fully local OCR plus human-review workflow, or manual structured entry.
+- Pseudonymisation is not anonymisation: work duties, ratings and context can remain personal data. Production requires the legal, contractual and organisational checks in `PRIVACY.md`.
 - Single-user, no auth (Supabase keys in `.env` are provisioned for a planned multi-user login, not wired up yet).

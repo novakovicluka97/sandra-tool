@@ -14,16 +14,16 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Zeugnis-Generator · Polymed",
+  title: "Zeugnis-Generator | Reference Generator · Polymed",
   description:
-    "Erstellt Entwürfe von Arbeits- und Zwischenzeugnissen aus ausgefüllten Zeugnisanträgen.",
+    "Creates HR-reviewed Swiss employment reference drafts from locally protected request forms.",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="de">
+    <html lang="de-CH">
       <body className={`${archivo.variable} ${sourceSerif.variable}`}>
         {children}
       </body>
