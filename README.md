@@ -10,6 +10,9 @@ Generates drafts of Swiss employment references (**Zwischenzeugnis** / **Arbeits
 ```
 app/                         Next.js App Router UI + POST /api/generate (streams the draft)
 lib/privacy.ts               Browser-only form extraction, placeholder vault, and reinsertion
+lib/docx.ts                  Browser-only Word rendering with optional header/footer artwork
+public/header-image.png      Default Polymed Word header artwork
+public/footer-image.jpg      Default Polymed Word footer artwork
 prompts/system-zeugnis.md    German system prompt: legal rules, calibration table, structure, output contract
 prompts/style-rules.md       Binding style rules (no em-dashes, natural HR register, signature block format)
 prompts/company-config.md    Polymed boilerplate: company paragraph, signatory rules, abbreviations
@@ -40,6 +43,8 @@ npm run test:privacy
 ```
 
 The app reads the known 149-field AcroForm locally and validates its exact schema fingerprint. It sends only a reviewed text transcript containing random placeholders plus the work-related fields required for drafting. The API route rejects multipart/file requests, extra JSON fields, malformed protected lines, raw PDF signatures, unknown privacy-protocol versions, and common direct identifiers. The original PDF, filename, signature, and replacement map stay in browser memory. Named examples and signatory configuration are pseudonymised at runtime before the provider prompt is built. Prompt and example `.md` files are read from disk at runtime (`next.config.mjs` includes them in the serverless bundle for Vercel).
+
+Finished drafts are converted to `.docx` locally in the browser. The gear button opens Word-output settings where HR can enable or disable the letterhead, replace the default header and footer with local PNG/JPG files, and adjust their Word distances. These assets and settings never enter the generation API payload.
 
 Flattened scans and unknown form versions are deliberately blocked because deterministic protection cannot be verified. There is no raw-PDF fallback. See [`PRIVACY.md`](PRIVACY.md) for the exact boundary and the checks still required before production use.
 
@@ -72,7 +77,7 @@ Harness default model: `claude-sonnet-5`. Real form PDFs are sent to the API nat
 
 ## Known limitations
 
-- Text/Markdown output only — no .docx/PDF rendering, letterhead, or signatures yet.
+- Word output includes configurable local header/footer artwork; PDF export and signature-image management are not implemented yet.
 - Company config is hardcoded to Polymed.
 - Only one real Arbeitszeugnis exists in the training data; AZ generation for non-Biafora cases relies on the prompt rules plus one example.
 - Web protection currently supports only the exact fillable GRP_DK_1054 v1.1 schema. Flattened scans require a future fully local OCR plus human-review workflow, or manual structured entry.

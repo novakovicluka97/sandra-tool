@@ -5,7 +5,11 @@
 
 import {
   AlignmentType,
+  convertInchesToTwip,
   Document,
+  Footer,
+  Header,
+  ImageRun,
   Packer,
   Paragraph,
   Tab,
@@ -15,10 +19,30 @@ import {
 
 export type LetterType = "zwischenzeugnis" | "arbeitszeugnis";
 
+export type LetterheadImage = {
+  source: string;
+  name: string;
+  type: "png" | "jpg";
+  width: number;
+  height: number;
+};
+
+export type LetterheadSettings = {
+  enabled: boolean;
+  header: LetterheadImage;
+  footer: LetterheadImage;
+  headerFromTopInches: number;
+  footerFromBottomInches: number;
+};
+
 const BODY_SIZE = 20; // half-points -> 10pt, as in training-data docx
 const TITLE_SIZE = 28; // 14pt
 const PARA_SPACING = 200; // twips ~= one blank 10pt line
 const SIGNER_TAB = 4536; // 8cm: second signer column, as in training-data
+const HEADER_MAX_WIDTH = 638;
+const HEADER_MAX_HEIGHT = 115;
+const FOOTER_MAX_WIDTH = 638;
+const FOOTER_MAX_HEIGHT = 32;
 
 const MONTHS: Record<string, string> = {
   januar: "01",
@@ -185,7 +209,108 @@ export function letterToParagraphs(markdown: string): Paragraph[] {
   return paragraphs;
 }
 
-export async function letterToDocxBlob(markdown: string): Promise<Blob> {
+function clampDistance(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.min(2, Math.max(0, value)) : fallback;
+}
+
+function distanceToTwip(value: number, displayedDefault: number, exactDefault: number) {
+  const clamped = clampDistance(value, displayedDefault);
+  // Word rounds the source template's 310/263 twips to 0.22/0.18 inches.
+  // Preserve those exact source values while showing the familiar UI numbers.
+  return Math.abs(clamped - displayedDefault) < 0.0001
+    ? exactDefault
+    : convertInchesToTwip(clamped);
+}
+
+function fittedSize(
+  image: LetterheadImage,
+  maxWidth: number,
+  maxHeight: number,
+): { width: number; height: number } {
+  const sourceWidth = image.width > 0 ? image.width : maxWidth;
+  const sourceHeight = image.height > 0 ? image.height : maxHeight;
+  const scale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight);
+  return {
+    width: Math.max(1, sourceWidth * scale),
+    height: Math.max(1, sourceHeight * scale),
+  };
+}
+
+async function loadLetterheadImage(image: LetterheadImage): Promise<ArrayBuffer> {
+  const response = await fetch(image.source);
+  if (!response.ok) {
+    throw new Error(`Could not load letterhead image: ${image.name}`);
+  }
+  return response.arrayBuffer();
+}
+
+function letterheadParagraph(
+  image: LetterheadImage,
+  data: ArrayBuffer,
+  maxWidth: number,
+  maxHeight: number,
+): Paragraph {
+  return new Paragraph({
+    children: [
+      new ImageRun({
+        type: image.type,
+        data,
+        transformation: fittedSize(image, maxWidth, maxHeight),
+        altText: {
+          name: image.name,
+          title: image.name,
+          description: image.name,
+        },
+      }),
+    ],
+    alignment: AlignmentType.LEFT,
+    spacing: { before: 0, after: 0 },
+  });
+}
+
+export async function letterToDocxBlob(
+  markdown: string,
+  letterhead?: LetterheadSettings,
+): Promise<Blob> {
+  const useLetterhead = Boolean(letterhead?.enabled);
+  const [headerData, footerData] = useLetterhead && letterhead
+    ? await Promise.all([
+        loadLetterheadImage(letterhead.header),
+        loadLetterheadImage(letterhead.footer),
+      ])
+    : [null, null];
+
+  const headers =
+    useLetterhead && letterhead && headerData
+      ? {
+          default: new Header({
+            children: [
+              letterheadParagraph(
+                letterhead.header,
+                headerData,
+                HEADER_MAX_WIDTH,
+                HEADER_MAX_HEIGHT,
+              ),
+            ],
+          }),
+        }
+      : undefined;
+  const footers =
+    useLetterhead && letterhead && footerData
+      ? {
+          default: new Footer({
+            children: [
+              letterheadParagraph(
+                letterhead.footer,
+                footerData,
+                FOOTER_MAX_WIDTH,
+                FOOTER_MAX_HEIGHT,
+              ),
+            ],
+          }),
+        }
+      : undefined;
+
   const doc = new Document({
     styles: {
       default: {
@@ -200,11 +325,32 @@ export async function letterToDocxBlob(markdown: string): Promise<Blob> {
     },
     sections: [
       {
+        headers,
+        footers,
         properties: {
           page: {
             // A4 with the margins of the original Polymed letters
             size: { width: 11906, height: 16838 },
-            margin: { top: 2127, right: 1133, bottom: 851, left: 1276 },
+            margin: {
+              top: 2127,
+              right: 1133,
+              bottom: useLetterhead ? 482 : 851,
+              left: 1276,
+              ...(useLetterhead && letterhead
+                ? {
+                    header: distanceToTwip(
+                      letterhead.headerFromTopInches,
+                      0.22,
+                      310,
+                    ),
+                    footer: distanceToTwip(
+                      letterhead.footerFromBottomInches,
+                      0.18,
+                      263,
+                    ),
+                  }
+                : {}),
+            },
           },
         },
         children: letterToParagraphs(markdown),

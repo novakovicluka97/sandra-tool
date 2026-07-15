@@ -2,12 +2,14 @@
 
 import Script from "next/script";
 import {
+  type ChangeEvent,
   useEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import type { LetterheadImage, LetterheadSettings } from "@/lib/docx";
 import type {
   PrivacyErrorCode,
   ProtectedForm,
@@ -36,6 +38,70 @@ type Job = {
   output: string;
   error: string;
 };
+
+type StoredLetterheadImage = LetterheadImage & {
+  isDefault: boolean;
+};
+
+type DocumentSettings = Omit<LetterheadSettings, "header" | "footer"> & {
+  header: StoredLetterheadImage;
+  footer: StoredLetterheadImage;
+};
+
+const DOCUMENT_SETTINGS_KEY = "sandra-document-settings-v1";
+const MAX_LETTERHEAD_IMAGE_BYTES = 1_500_000;
+
+const DEFAULT_HEADER: StoredLetterheadImage = {
+  source: "/header-image.png",
+  name: "Polymed Briefkopf",
+  type: "png",
+  width: 2193,
+  height: 395,
+  isDefault: true,
+};
+
+const DEFAULT_FOOTER: StoredLetterheadImage = {
+  source: "/footer-image.jpg",
+  name: "Polymed Fusszeile",
+  type: "jpg",
+  width: 1994,
+  height: 35,
+  isDefault: true,
+};
+
+function defaultDocumentSettings(): DocumentSettings {
+  return {
+    enabled: true,
+    header: { ...DEFAULT_HEADER },
+    footer: { ...DEFAULT_FOOTER },
+    headerFromTopInches: 0.22,
+    footerFromBottomInches: 0.18,
+  };
+}
+
+function readImageFile(file: File): Promise<{
+  source: string;
+  width: number;
+  height: number;
+}> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read_failed"));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("read_failed"));
+        return;
+      }
+      const source = reader.result;
+      const image = new Image();
+      image.onerror = () => reject(new Error("invalid_image"));
+      image.onload = () =>
+        resolve({ source, width: image.naturalWidth, height: image.naturalHeight });
+      image.src = source;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 const COPY = {
   de: {
@@ -103,6 +169,32 @@ const COPY = {
     drafts: "Entwürfe",
     downloadAll: (count: number) => `Alle herunterladen (${count})`,
     downloadWord: "Word herunterladen (.docx)",
+    settings: "Word-Einstellungen",
+    settingsEyebrow: "Dokumentausgabe",
+    settingsTitle: "Briefkopf und Fusszeile",
+    settingsIntro:
+      "Diese Einstellungen gelten nur für lokal erstellte Word-Dateien. Bilder und Einstellungen werden nicht an Anthropic übermittelt.",
+    letterheadToggle: "Briefkopf und Fusszeile einfügen",
+    letterheadOn: "Standardmässig aktiviert",
+    headerLabel: "Briefkopf",
+    footerLabel: "Fusszeile",
+    defaultArtwork: "Polymed Standard",
+    customArtwork: "Eigenes Bild",
+    replaceImage: "Bild ersetzen",
+    restoreDefault: "Standard wiederherstellen",
+    headerDistance: "Abstand von oben",
+    footerDistance: "Abstand von unten",
+    inches: "Zoll",
+    distanceHint: "Entspricht den Einstellungen der Word-Vorlage.",
+    headerImageHint: "PNG oder JPG, empfohlenes Format ca. 5.5:1",
+    footerImageHint: "PNG oder JPG, empfohlenes sehr breites Format",
+    resetSettings: "Alles zurücksetzen",
+    doneSettings: "Fertig",
+    imageTooLarge: "Das Bild darf höchstens 1.5 MB gross sein.",
+    imageTypeError: "Bitte eine PNG- oder JPG-Datei auswählen.",
+    imageReadError: "Das Bild konnte nicht gelesen werden.",
+    settingsStorageError:
+      "Die Auswahl funktioniert für diese Sitzung, konnte aber nicht dauerhaft gespeichert werden.",
     phase: {
       queued: "wartet",
       sending: "wird gesendet",
@@ -211,6 +303,32 @@ const COPY = {
     drafts: "Drafts",
     downloadAll: (count: number) => `Download all (${count})`,
     downloadWord: "Download Word (.docx)",
+    settings: "Word settings",
+    settingsEyebrow: "Document output",
+    settingsTitle: "Header and footer",
+    settingsIntro:
+      "These settings apply only to Word files created locally. Images and settings are never sent to Anthropic.",
+    letterheadToggle: "Include header and footer",
+    letterheadOn: "Enabled by default",
+    headerLabel: "Header",
+    footerLabel: "Footer",
+    defaultArtwork: "Polymed default",
+    customArtwork: "Custom image",
+    replaceImage: "Replace image",
+    restoreDefault: "Restore default",
+    headerDistance: "Distance from top",
+    footerDistance: "Distance from bottom",
+    inches: "inches",
+    distanceHint: "Matches the original Word template settings.",
+    headerImageHint: "PNG or JPG, recommended ratio approx. 5.5:1",
+    footerImageHint: "PNG or JPG, a very wide image works best",
+    resetSettings: "Reset all",
+    doneSettings: "Done",
+    imageTooLarge: "The image must be 1.5 MB or smaller.",
+    imageTypeError: "Please choose a PNG or JPG file.",
+    imageReadError: "The image could not be read.",
+    settingsStorageError:
+      "The selection works for this session but could not be saved permanently.",
     phase: {
       queued: "waiting",
       sending: "sending",
@@ -398,9 +516,15 @@ export default function Home() {
   const [pickError, setPickError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [documentSettings, setDocumentSettings] = useState<DocumentSettings>(
+    defaultDocumentSettings,
+  );
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
   const privacyDialogRef = useRef<HTMLDialogElement | null>(null);
+  const settingsDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const c = COPY[locale];
   const activeJob = jobs.find((job) => job.id === activeId) ?? jobs[0] ?? null;
@@ -408,6 +532,31 @@ export default function Home() {
   useEffect(() => {
     const saved = window.localStorage.getItem("sandra-ui-locale");
     if (saved === "de" || saved === "en") setLocale(saved);
+
+    const savedDocumentSettings = window.localStorage.getItem(DOCUMENT_SETTINGS_KEY);
+    if (savedDocumentSettings) {
+      try {
+        const parsed = JSON.parse(savedDocumentSettings) as Partial<DocumentSettings>;
+        const defaults = defaultDocumentSettings();
+        setDocumentSettings({
+          enabled:
+            typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+          header: { ...defaults.header, ...(parsed.header ?? {}) },
+          footer: { ...defaults.footer, ...(parsed.footer ?? {}) },
+          headerFromTopInches:
+            typeof parsed.headerFromTopInches === "number"
+              ? parsed.headerFromTopInches
+              : defaults.headerFromTopInches,
+          footerFromBottomInches:
+            typeof parsed.footerFromBottomInches === "number"
+              ? parsed.footerFromBottomInches
+              : defaults.footerFromBottomInches,
+        });
+      } catch {
+        window.localStorage.removeItem(DOCUMENT_SETTINGS_KEY);
+      }
+    }
+    setSettingsHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -418,6 +567,77 @@ export default function Home() {
         : "Reference Generator · Polymed";
     window.localStorage.setItem("sandra-ui-locale", locale);
   }, [locale]);
+
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    try {
+      window.localStorage.setItem(
+        DOCUMENT_SETTINGS_KEY,
+        JSON.stringify(documentSettings),
+      );
+      setSettingsError((current) =>
+        current === COPY.de.settingsStorageError ||
+        current === COPY.en.settingsStorageError
+          ? ""
+          : current,
+      );
+    } catch {
+      setSettingsError(COPY[locale].settingsStorageError);
+    }
+  }, [documentSettings, locale, settingsHydrated]);
+
+  async function replaceLetterheadImage(
+    slot: "header" | "footer",
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (file.type !== "image/png" && file.type !== "image/jpeg") {
+      setSettingsError(c.imageTypeError);
+      return;
+    }
+    if (file.size > MAX_LETTERHEAD_IMAGE_BYTES) {
+      setSettingsError(c.imageTooLarge);
+      return;
+    }
+
+    try {
+      const image = await readImageFile(file);
+      setDocumentSettings((current) => ({
+        ...current,
+        [slot]: {
+          ...image,
+          name: file.name,
+          type: file.type === "image/png" ? "png" : "jpg",
+          isDefault: false,
+        },
+      }));
+      setSettingsError("");
+    } catch {
+      setSettingsError(c.imageReadError);
+    }
+  }
+
+  function restoreLetterheadImage(slot: "header" | "footer") {
+    setDocumentSettings((current) => ({
+      ...current,
+      [slot]: { ...(slot === "header" ? DEFAULT_HEADER : DEFAULT_FOOTER) },
+    }));
+    setSettingsError("");
+  }
+
+  function setLetterheadDistance(
+    field: "headerFromTopInches" | "footerFromBottomInches",
+    value: number,
+  ) {
+    if (!Number.isFinite(value)) return;
+    setDocumentSettings((current) => ({
+      ...current,
+      [field]: Math.min(2, Math.max(0, value)),
+    }));
+  }
 
   function formatSize(bytes: number): string {
     if (bytes < 1024 * 1024) {
@@ -621,7 +841,7 @@ export default function Home() {
   async function downloadJob(job: Job) {
     if (!job.output) return;
     const { letterToDocxBlob, letterFilename } = await import("@/lib/docx");
-    const blob = await letterToDocxBlob(job.output);
+    const blob = await letterToDocxBlob(job.output, documentSettings);
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -694,6 +914,18 @@ export default function Home() {
           </h1>
         </div>
         <div className="masthead-actions">
+          <button
+            type="button"
+            className="settings-button"
+            aria-label={c.settings}
+            title={c.settings}
+            onClick={() => settingsDialogRef.current?.showModal()}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9.8 2h4.4l.6 2.4a8 8 0 0 1 1.4.8l2.4-.7 2.2 3.8-1.8 1.7a8 8 0 0 1 0 1.8l1.8 1.7-2.2 3.8-2.4-.7a8 8 0 0 1-1.4.8l-.6 2.4H9.8l-.6-2.4a8 8 0 0 1-1.4-.8l-2.4.7-2.2-3.8L5 11.8a8 8 0 0 1 0-1.8L3.2 8.3l2.2-3.8 2.4.7a8 8 0 0 1 1.4-.8L9.8 2Z" />
+              <circle cx="12" cy="11" r="3" />
+            </svg>
+          </button>
           <button
             type="button"
             className="how-button"
@@ -1076,6 +1308,176 @@ export default function Home() {
           </dl>
         </address>
       </footer>
+
+      <dialog
+        ref={settingsDialogRef}
+        className="settings-dialog"
+        aria-labelledby="settings-title"
+        aria-describedby="settings-intro"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) event.currentTarget.close();
+        }}
+      >
+        <div className="settings-shell">
+          <button
+            type="button"
+            className="dialog-close"
+            aria-label={c.close}
+            onClick={() => settingsDialogRef.current?.close()}
+          >
+            ×
+          </button>
+
+          <div className="settings-heading">
+            <span className="dialog-eyebrow">{c.settingsEyebrow}</span>
+            <h2 id="settings-title">{c.settingsTitle}</h2>
+            <p id="settings-intro">{c.settingsIntro}</p>
+          </div>
+
+          <label className="letterhead-switch">
+            <input
+              type="checkbox"
+              checked={documentSettings.enabled}
+              onChange={(event) =>
+                setDocumentSettings((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }))
+              }
+            />
+            <span className="switch-track" aria-hidden="true">
+              <span />
+            </span>
+            <span className="switch-copy">
+              <strong>{c.letterheadToggle}</strong>
+              <small>{c.letterheadOn}</small>
+            </span>
+          </label>
+
+          <fieldset
+            className="settings-fields"
+            disabled={!documentSettings.enabled}
+          >
+            <div className="artwork-grid">
+              {(["header", "footer"] as const).map((slot) => {
+                const artwork = documentSettings[slot];
+                const label = slot === "header" ? c.headerLabel : c.footerLabel;
+                return (
+                  <section className="artwork-card" key={slot}>
+                    <div className="artwork-card-heading">
+                      <div>
+                        <span>{label}</span>
+                        <strong>
+                          {artwork.isDefault ? c.defaultArtwork : c.customArtwork}
+                        </strong>
+                      </div>
+                      <span className="artwork-dimensions">
+                        {artwork.width} × {artwork.height}px
+                      </span>
+                    </div>
+                    <div className={`artwork-preview ${slot}`}>
+                      <img src={artwork.source} alt={`${label}: ${artwork.name}`} />
+                    </div>
+                    <p className="artwork-name" title={artwork.name}>
+                      {artwork.name}
+                    </p>
+                    <div className="artwork-actions">
+                      <label className="replace-artwork">
+                        {c.replaceImage}
+                        <input
+                          type="file"
+                          accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                          onChange={(event) =>
+                            void replaceLetterheadImage(slot, event)
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => restoreLetterheadImage(slot)}
+                        disabled={artwork.isDefault}
+                      >
+                        {c.restoreDefault}
+                      </button>
+                    </div>
+                    <small className="artwork-hint">
+                      {slot === "header" ? c.headerImageHint : c.footerImageHint}
+                    </small>
+                  </section>
+                );
+              })}
+            </div>
+
+            <div className="distance-panel">
+              <label>
+                <span>{c.headerDistance}</span>
+                <span className="number-field">
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.01"
+                    value={documentSettings.headerFromTopInches}
+                    onChange={(event) =>
+                      setLetterheadDistance(
+                        "headerFromTopInches",
+                        event.target.valueAsNumber,
+                      )
+                    }
+                  />
+                  <small>{c.inches}</small>
+                </span>
+              </label>
+              <label>
+                <span>{c.footerDistance}</span>
+                <span className="number-field">
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.01"
+                    value={documentSettings.footerFromBottomInches}
+                    onChange={(event) =>
+                      setLetterheadDistance(
+                        "footerFromBottomInches",
+                        event.target.valueAsNumber,
+                      )
+                    }
+                  />
+                  <small>{c.inches}</small>
+                </span>
+              </label>
+              <p>{c.distanceHint}</p>
+            </div>
+          </fieldset>
+
+          {settingsError && (
+            <p className="settings-error" role="alert">
+              {settingsError}
+            </p>
+          )}
+
+          <div className="settings-footer-actions">
+            <button
+              type="button"
+              className="reset-settings"
+              onClick={() => {
+                setDocumentSettings(defaultDocumentSettings());
+                setSettingsError("");
+              }}
+            >
+              {c.resetSettings}
+            </button>
+            <button
+              type="button"
+              className="understood"
+              onClick={() => settingsDialogRef.current?.close()}
+            >
+              {c.doneSettings}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       <dialog
         ref={privacyDialogRef}
