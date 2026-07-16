@@ -164,6 +164,12 @@ const COPY = {
     draftsReady: "Entwürfe fertig. Bitte durch HR prüfen.",
     partialReady: (done: number, total: number) =>
       `${done} von ${total} Entwürfen fertig.`,
+    docLoadingTitle: "Dokument wird erstellt",
+    docLoadingBody:
+      "Voraussichtliche Dauer pro Dokument: unter 50 Sekunden.",
+    docReadyTitle: "Dokument bereit",
+    docReadyBody:
+      "Der Entwurf steht als Word-Datei bereit. Bitte herunterladen und durch HR prüfen lassen.",
     localCheck: "Lokale Datenschutzprüfung läuft …",
     removeBlocked: "Blockierte Dateien entfernen, um fortzufahren.",
     drafts: "Entwürfe",
@@ -298,6 +304,12 @@ const COPY = {
     draftsReady: "Drafts ready. HR review is required.",
     partialReady: (done: number, total: number) =>
       `${done} of ${total} drafts ready.`,
+    docLoadingTitle: "Creating document",
+    docLoadingBody:
+      "Expected time per document: under 50 seconds.",
+    docReadyTitle: "Document ready",
+    docReadyBody:
+      "The draft is available as a Word file. Please download it and have HR review it.",
     localCheck: "Running local privacy check …",
     removeBlocked: "Remove blocked files to continue.",
     drafts: "Drafts",
@@ -1223,6 +1235,43 @@ export default function Home() {
                 jobs.length > 1 && activeJob ? `job-tab-${activeJob.id}` : undefined
               }
             >
+              {/*
+                The on-screen letter preview is intentionally hidden. The
+                rendered markdown did NOT match the downloaded Word file
+                (letterhead, footer, formatting), which misled users into
+                thinking the preview was the file they were downloading. We now
+                show a neutral loading/ready widget instead; the real document is
+                still generated and available via the download button above.
+                Restore the block below only if a true, faithful preview exists.
+              */}
+              {activeJob && activeJob.phase === "error" ? (
+                <div className="doc-empty error-state">
+                  <div className="glyph" aria-hidden="true">!</div>
+                  <p>{activeJob.error || c.generationFailed}</p>
+                </div>
+              ) : activeJob && activeJob.phase === "done" ? (
+                <div className="doc-status ready" role="status">
+                  <div className="doc-status-icon" aria-hidden="true">✓</div>
+                  <strong>{c.docReadyTitle}</strong>
+                  <p>{c.docReadyBody}</p>
+                </div>
+              ) : activeJob ? (
+                <div
+                  className="doc-status loading"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="doc-loader-ring" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <strong>{c.docLoadingTitle}</strong>
+                  <p>{c.docLoadingBody}</p>
+                </div>
+              ) : null}
+
+              {/* Original preview rendering, disabled per the note above:
               {activeJob && (activeJob.output || activeJob.phase === "error") ? (
                 activeJob.phase === "error" && !activeJob.output ? (
                   <div className="doc-empty error-state">
@@ -1250,6 +1299,7 @@ export default function Home() {
                   <span className="medium" />
                 </div>
               ) : null}
+              */}
             </div>
           </section>
         )}
